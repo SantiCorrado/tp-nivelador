@@ -8,6 +8,8 @@ services:
       - PYTHONUNBUFFERED=1
       - SERVER_HOST=server
       - SERVER_PORT=5678
+    ports:
+      - "5678:5678"
 
   client_0:
     build:
@@ -20,3 +22,63 @@ services:
       - AGENCY_ID=0
       - SERVER_HOST=server
       - SERVER_PORT=5678
+      - INPUT_FILE=/app/input/input_0.txt
+      - OUTPUT_FILE=/app/output/output_0.txt
+
+  client_1:
+    build:
+      context: ./services/client
+      dockerfile: Dockerfile
+    container_name: client_1
+    depends_on:
+      - server
+    environment:
+      - AGENCY_ID=1
+      - SERVER_HOST=server
+      - SERVER_PORT=5678
+      - INPUT_FILE=/app/input/input_0.txt
+      - OUTPUT_FILE=/app/output/output_1.txt
+  client_2:
+    build:
+      context: ./services/client
+      dockerfile: Dockerfile
+    container_name: client_2
+    depends_on:
+      - server
+    environment:
+      - AGENCY_ID=2
+      - SERVER_HOST=server
+      - SERVER_PORT=5678
+      - INPUT_FILE=/app/input/input_0.txt
+      - OUTPUT_FILE=/app/output/output_2.txt
+  client_3:
+    build:
+      context: ./services/client
+      dockerfile: Dockerfile
+    container_name: client_3
+    depends_on:
+      - server
+    environment:
+      - AGENCY_ID=3
+      - SERVER_HOST=server
+      - SERVER_PORT=5678
+      - INPUT_FILE=/app/input/input_0.txt
+      - OUTPUT_FILE=/app/output/output_3.txt
+
+  client_4:
+    build:
+      context: ./services/client
+      dockerfile: Dockerfile
+    container_name: client_4
+    depends_on:
+      - server
+    environment:
+      - AGENCY_ID=4
+      - SERVER_HOST=server
+      - SERVER_PORT=5678
+      - INPUT_FILE=/app/input/input_0.txt
+      - OUTPUT_FILE=/app/output/output_4.txt
+
+volumes:
+   - ./input:/app/input
+   - ./output:/app/output

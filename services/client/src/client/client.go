@@ -19,6 +19,8 @@ type ClientConfig struct {
 	ServerHost string
 	ServerPort string
 	AgencyId   string
+	inputFile  string
+	outputFile string
 }
 
 type Client struct {
@@ -59,7 +61,7 @@ func connectToServer(host, port string) (net.Conn, error) {
 }
 
 func (client *Client) Run() error {
-	const mainAction = "test-echo-server"
+	const mainAction = "proto loteria"
 	defer client.conn.Close()
 
 	for messageId := range ECHO_CLIENT_MESSAGE_AMOUNT {
