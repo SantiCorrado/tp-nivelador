@@ -1,7 +1,9 @@
 package client
 
 import (
+	"bufio"
 	"net"
+	"os"
 	"time"
 
 	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/logger"
@@ -19,13 +21,15 @@ type ClientConfig struct {
 	ServerHost string
 	ServerPort string
 	AgencyId   string
-	inputFile  string
-	outputFile string
+	InputFile  string
+	OutputFile string
 }
 
 type Client struct {
 	conn   net.Conn
 	config ClientConfig
+	input  *os.File
+	output string
 }
 
 func NewClient(config ClientConfig) (*Client, error) {
@@ -35,7 +39,12 @@ func NewClient(config ClientConfig) (*Client, error) {
 		return nil, err
 	}
 
-	client := &Client{conn: conn, config: config}
+	inputFile, err := openFile(config.InputFile)
+	if err != nil {
+		logger.Warn("open-file", logger.Fail)
+		return nil, err
+	}
+	client := &Client{conn: conn, config: config, input: inputFile, output: config.OutputFile}
 	return client, nil
 }
 
@@ -60,34 +69,62 @@ func connectToServer(host, port string) (net.Conn, error) {
 	return conn, err
 }
 
-func (client *Client) Run() error {
-	const mainAction = "proto loteria"
-	defer client.conn.Close()
+func openFile(filePath string) (*os.File, error) {
+	const action = "open-file"
+	file, err := os.Open(filePath)
+	if err != nil {
+		logger.Error(action, logger.Fail, "file-path", filePath)
+		return nil, err
+	}
 
-	for messageId := range ECHO_CLIENT_MESSAGE_AMOUNT {
-		messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", messageId}
+	logger.Info(action, logger.Success, "file-path", filePath)
+	return file, nil
+}
+
+func (client *Client) Run() error {
+	const mainAction = "enviando registros de agencia"
+	defer client.conn.Close()
+	defer client.input.Close()
+	scanner := bufio.NewScanner(client.input)
+
+	i := 0
+
+	initialMessage := client.config.AgencyId + "," + client.output + "\n"
+	if err := safe_socket.SendAll(client.conn, []byte(initialMessage)); err != nil {
+		logger.Error("send-message", logger.Fail, "Error enviando mensaje inicial", "agency-id", client.config.AgencyId, "output-file", client.output)
+		return err
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", i}
 		logger.Info(mainAction, logger.InProgress, messageArgs...)
 
-		clientMessage := client.config.AgencyId
-
-		if err := safe_socket.SendAll(client.conn, []byte(clientMessage)); err != nil {
+		if err := safe_socket.SendAll(client.conn, []byte(line+"\n")); err != nil {
 			logger.Error("send-message", logger.Fail, messageArgs...)
 			return err
 		}
-
-		responseBuffer, err := safe_socket.RecvAll(client.conn, ECHO_CLIENT_BUFFER_SIZE)
-		if err != nil {
-			logger.Error("recv-response", logger.Fail, messageArgs...)
-			return err
-		}
-
-		if string(responseBuffer) == clientMessage {
-			logger.Error("check-response", logger.Fail, messageArgs...)
-			return err
-		}
-
-		time.Sleep(ECHO_CLIENT_MESSAGE_DELAY_MS * time.Millisecond)
+		i++
 	}
+	if err := scanner.Err(); err != nil {
+		bufiocheck := []any{"cliente: ", client.config.AgencyId, "error leyendo archivo de entrada"}
+		logger.Error("read-input", logger.Fail, bufiocheck...)
+		return err
+	}
+
+	if err := safe_socket.SendAll(client.conn, []byte("EOF\n")); err != nil {
+		logger.Error("send-message", logger.Fail, "Error enviando mensaje final", "agency-id", client.config.AgencyId, "output-file", client.output)
+		return err
+	}
+
+	// aca faltaria el manejo de output y ganador recibido desde el servidor
+	_, err := safe_socket.RecvAll(client.conn, ECHO_CLIENT_BUFFER_SIZE)
+	if err != nil {
+		logger.Error("recv-response", logger.Fail)
+		return err
+	}
+
 	logger.Info(mainAction, logger.Success, "agency-id", client.config.AgencyId)
 
 	return nil
