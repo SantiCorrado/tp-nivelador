@@ -22,8 +22,11 @@ services:
       - AGENCY_ID=0
       - SERVER_HOST=server
       - SERVER_PORT=5678
-      - INPUT_FILE=/app/input/input_0.txt
-      - OUTPUT_FILE=/app/output/output_0.txt
+      - INPUT_FILE=/app/input/input-0.csv
+      - OUTPUT_FILE=/app/output/output_0.csv
+    volumes:
+    - ./input:/app/input
+    - ./output:/app/output
 
   client_1:
     build:
@@ -36,8 +39,11 @@ services:
       - AGENCY_ID=1
       - SERVER_HOST=server
       - SERVER_PORT=5678
-      - INPUT_FILE=/app/input/input_0.txt
-      - OUTPUT_FILE=/app/output/output_1.txt
+      - INPUT_FILE=/app/input/input-0.csv
+      - OUTPUT_FILE=/app/output/output_1.csv
+    volumes:
+    - ./input:/app/input
+    - ./output:/app/output
   client_2:
     build:
       context: ./services/client
@@ -49,8 +55,11 @@ services:
       - AGENCY_ID=2
       - SERVER_HOST=server
       - SERVER_PORT=5678
-      - INPUT_FILE=/app/input/input_0.txt
-      - OUTPUT_FILE=/app/output/output_2.txt
+      - INPUT_FILE=/app/input/input-0.csv
+      - OUTPUT_FILE=/app/output/output_2.csv
+    volumes:
+    - ./input:/app/input
+    - ./output:/app/output
   client_3:
     build:
       context: ./services/client
@@ -62,8 +71,11 @@ services:
       - AGENCY_ID=3
       - SERVER_HOST=server
       - SERVER_PORT=5678
-      - INPUT_FILE=/app/input/input_0.txt
-      - OUTPUT_FILE=/app/output/output_3.txt
+      - INPUT_FILE=/app/input/input-0.csv
+      - OUTPUT_FILE=/app/output/output_3.csv
+    volumes:
+    - ./input:/app/input
+    - ./output:/app/output
 
   client_4:
     build:
@@ -76,9 +88,8 @@ services:
       - AGENCY_ID=4
       - SERVER_HOST=server
       - SERVER_PORT=5678
-      - INPUT_FILE=/app/input/input_0.txt
-      - OUTPUT_FILE=/app/output/output_4.txt
-
-volumes:
-   - ./input:/app/input
-   - ./output:/app/output
+      - INPUT_FILE=/app/input/input-0.csv
+      - OUTPUT_FILE=/app/output/output_4.csv
+    volumes:
+    - ./input:/app/input
+    - ./output:/app/output

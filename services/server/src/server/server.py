@@ -13,27 +13,37 @@ class Server:
     def _handle_client(self, client_socket):
         action = "handle-client"
         message_amount = 0
+        agency = ""
         try:
             logger.info(action, logger.LogResult.in_progress)
             while True:
-                client_message = safe_socket.recv_all(
-                    client_socket, _ECHO_SERVER_MESSAGE_SIZE
-                )
+                client_message = safe_socket.recv_all( client_socket, _ECHO_SERVER_MESSAGE_SIZE)
                 if not client_message:
+                    break
+
+                if agency is None:
+                    agency = client_message.decode("utf-8").strip()
+                    continue
+                
+                if client_message == b"EOF\n":
                     logger.info(
                         action,
                         logger.LogResult.success,
                         "messages-amount",
                         message_amount,
                     )
-                    return
+                    break
                 message_amount += 1
-                safe_socket.send_all(client_socket, client_message)
+            final_message = (f"Agency: {agency}, Messages received: {message_amount}\n").encode("utf-8")
+            safe_socket.send_all(client_socket, final_message)
         except Exception as e:
             logger.error(
                 action, logger.LogResult.fail, "messages-amount", message_amount
             )
             raise e
+        finally:
+            client_socket.close()
+        
 
     def run(self):
         action = "accept-connection"

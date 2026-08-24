@@ -2,6 +2,8 @@ package client
 
 import (
 	"bufio"
+	"encoding/csv"
+	"log"
 	"net"
 	"os"
 	"time"
@@ -29,7 +31,6 @@ type Client struct {
 	conn   net.Conn
 	config ClientConfig
 	input  *os.File
-	output string
 }
 
 func NewClient(config ClientConfig) (*Client, error) {
@@ -44,7 +45,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 		logger.Warn("open-file", logger.Fail)
 		return nil, err
 	}
-	client := &Client{conn: conn, config: config, input: inputFile, output: config.OutputFile}
+	client := &Client{conn: conn, config: config, input: inputFile}
 	return client, nil
 }
 
@@ -89,9 +90,9 @@ func (client *Client) Run() error {
 
 	i := 0
 
-	initialMessage := client.config.AgencyId + "," + client.output + "\n"
+	initialMessage := client.config.AgencyId + "\n"
 	if err := safe_socket.SendAll(client.conn, []byte(initialMessage)); err != nil {
-		logger.Error("send-message", logger.Fail, "Error enviando mensaje inicial", "agency-id", client.config.AgencyId, "output-file", client.output)
+		logger.Error("send-message", logger.Fail, "Error enviando mensaje inicial", "agency-id", client.config.AgencyId, "output-file", client.config.OutputFile)
 		return err
 	}
 
@@ -114,16 +115,24 @@ func (client *Client) Run() error {
 	}
 
 	if err := safe_socket.SendAll(client.conn, []byte("EOF\n")); err != nil {
-		logger.Error("send-message", logger.Fail, "Error enviando mensaje final", "agency-id", client.config.AgencyId, "output-file", client.output)
+		logger.Error("send-message", logger.Fail, "Error enviando mensaje final", "agency-id", client.config.AgencyId, "output-file", client.config.OutputFile)
 		return err
 	}
 
-	// aca faltaria el manejo de output y ganador recibido desde el servidor
-	_, err := safe_socket.RecvAll(client.conn, ECHO_CLIENT_BUFFER_SIZE)
+	final_message, err := safe_socket.RecvAll(client.conn, ECHO_CLIENT_BUFFER_SIZE)
 	if err != nil {
 		logger.Error("recv-response", logger.Fail)
 		return err
 	}
+	file, err := os.Create(client.config.OutputFile)
+	if err != nil {
+		log.Fatalf("Error al crear el archivo: %s", err)
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+	writer.Write([]string{string(final_message)})
 
 	logger.Info(mainAction, logger.Success, "agency-id", client.config.AgencyId)
 
