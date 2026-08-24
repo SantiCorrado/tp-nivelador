@@ -2,10 +2,12 @@ package client
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/csv"
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/logger"
@@ -15,9 +17,14 @@ import (
 const CONNECTION_ATTEMPTS_MAX = 3
 const CONNECTION_ATTEMPS_DELAY_MS = 200
 
-const ECHO_CLIENT_BUFFER_SIZE = 512
-const ECHO_CLIENT_MESSAGE_AMOUNT = 3
-const ECHO_CLIENT_MESSAGE_DELAY_MS = 1000
+const CLIENT_BUFFER_MAX_SIZE = 1024
+const SIZE_LENGTH = 4
+const AGENCY_ID_LENGTH = 4
+const TYPE_LENGTH = 1
+
+const TYPE_AGENCY_ID = byte(1)
+const TYPE_BET = byte(2)
+const TYPE_END = byte(3)
 
 type ClientConfig struct {
 	ServerHost string
@@ -82,6 +89,38 @@ func openFile(filePath string) (*os.File, error) {
 	return file, nil
 }
 
+func encodeID(id string) ([]byte, error) {
+	encoded := make([]byte, AGENCY_ID_LENGTH)
+	e_id, err := strconv.Atoi(id)
+	if err != nil {
+		return nil, err
+	}
+	binary.BigEndian.PutUint32(encoded, (uint32)(e_id))
+	return encoded, nil
+}
+
+func sendMessage(client *Client, messagetype byte, message []byte) error {
+	header := make([]byte, TYPE_LENGTH+SIZE_LENGTH)
+	header[0] = messagetype
+	binary.BigEndian.PutUint32(header[1:], (uint32)(len(message)))
+	if err := safe_socket.SendAll(client.conn, header); err != nil {
+		return err
+	}
+	if err := safe_socket.SendAll(client.conn, message); err != nil {
+		return err
+	}
+	return nil
+}
+
+func sendgreetings(client *Client) error {
+	id, err := encodeID(client.config.AgencyId)
+	if err != nil {
+		logger.Error("encode-id", logger.Fail, "agency-id", client.config.AgencyId)
+		return err
+	}
+	return sendMessage(client, TYPE_AGENCY_ID, id)
+}
+
 func (client *Client) Run() error {
 	const mainAction = "enviando registros de agencia"
 	defer client.conn.Close()
@@ -89,24 +128,32 @@ func (client *Client) Run() error {
 	scanner := bufio.NewScanner(client.input)
 
 	i := 0
-
-	initialMessage := client.config.AgencyId + "\n"
-	if err := safe_socket.SendAll(client.conn, []byte(initialMessage)); err != nil {
-		logger.Error("send-message", logger.Fail, "Error enviando mensaje inicial", "agency-id", client.config.AgencyId, "output-file", client.config.OutputFile)
+	// Enviar mensaje inicial
+	if err := sendgreetings(client); err != nil {
 		return err
 	}
-
+	buffer := []byte{}
 	for scanner.Scan() {
-		line := scanner.Text()
-
+		bline := []byte(scanner.Text() + "\n")
 		messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", i}
 		logger.Info(mainAction, logger.InProgress, messageArgs...)
-
-		if err := safe_socket.SendAll(client.conn, []byte(line+"\n")); err != nil {
-			logger.Error("send-message", logger.Fail, messageArgs...)
+		if len(buffer)+len(bline) > CLIENT_BUFFER_MAX_SIZE {
+			//enviar registros acumulados
+			if err := sendMessage(client, TYPE_BET, buffer); err != nil {
+				logger.Error("send-message", logger.Fail, messageArgs...)
+				return err
+			}
+			buffer = []byte{}
+		}
+		buffer = append(buffer, bline...)
+		i++
+	}
+	if len(buffer) > 0 {
+		//enviar ultimos registros acumulados
+		if err := sendMessage(client, TYPE_BET, buffer); err != nil {
+			logger.Error("send-message", logger.Fail, "Error enviando mensaje final", "agency-id", client.config.AgencyId, "output-file", client.config.OutputFile)
 			return err
 		}
-		i++
 	}
 	if err := scanner.Err(); err != nil {
 		bufiocheck := []any{"cliente: ", client.config.AgencyId, "error leyendo archivo de entrada"}
@@ -114,12 +161,12 @@ func (client *Client) Run() error {
 		return err
 	}
 
-	if err := safe_socket.SendAll(client.conn, []byte("EOF\n")); err != nil {
-		logger.Error("send-message", logger.Fail, "Error enviando mensaje final", "agency-id", client.config.AgencyId, "output-file", client.config.OutputFile)
+	//Fin archivo, enviar mensaje de fin
+	if err := sendMessage(client, TYPE_END, nil); err != nil {
 		return err
 	}
 
-	final_message, err := safe_socket.RecvAll(client.conn, ECHO_CLIENT_BUFFER_SIZE)
+	final_message, err := safe_socket.RecvAll(client.conn, CLIENT_BUFFER_MAX_SIZE)
 	if err != nil {
 		logger.Error("recv-response", logger.Fail)
 		return err

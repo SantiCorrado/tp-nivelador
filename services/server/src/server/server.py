@@ -3,7 +3,16 @@ import logger
 import safe_socket
 
 _ECHO_SERVER_MESSAGE_SIZE = 1024
+_SIZE_LENGTH = 4
 
+
+_HEADER_LENGTH = 5
+_TYPE_LENGTH = 1
+_SIZE_LENGTH = 4
+
+_TYPE_GREETINGS = 1
+_TYPE_BET = 2
+_TYPE_END = 3
 
 class Server:
     def __init__(self, server_host: str, server_port: int) -> None:
@@ -14,18 +23,22 @@ class Server:
         action = "handle-client"
         message_amount = 0
         agency = ""
+        length = 0
         try:
             logger.info(action, logger.LogResult.in_progress)
             while True:
+                if not lengthknown:
+                    client_message = safe_socket.recv_all( client_socket, _SIZE_LENGTH)
+                    if not client_message:
+                        break
+                    length = int.from_bytes(client_message, byteorder="big")
+                    lengthknown = True
+                    
                 client_message = safe_socket.recv_all( client_socket, _ECHO_SERVER_MESSAGE_SIZE)
                 if not client_message:
                     break
 
-                if agency is None:
-                    agency = client_message.decode("utf-8").strip()
-                    continue
-                
-                if client_message == b"EOF\n":
+                if client_message == _END:
                     logger.info(
                         action,
                         logger.LogResult.success,
