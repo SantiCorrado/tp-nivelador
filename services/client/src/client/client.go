@@ -3,7 +3,7 @@ package client
 import (
 	"bufio"
 	"encoding/binary"
-	"encoding/csv"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -25,6 +25,7 @@ const TYPE_LENGTH = 1
 const TYPE_AGENCY_ID = byte(1)
 const TYPE_BET = byte(2)
 const TYPE_END = byte(3)
+const TYPE_WINNERS = byte(4)
 
 type ClientConfig struct {
 	ServerHost string
@@ -121,6 +122,35 @@ func sendgreetings(client *Client) error {
 	return sendMessage(client, TYPE_AGENCY_ID, id)
 }
 
+func receiveWinners(client *Client) error {
+	header, err := safe_socket.RecvAll(client.conn, TYPE_LENGTH+SIZE_LENGTH)
+	if err != nil {
+		logger.Error("recv-header", logger.Fail)
+		return err
+	}
+	messageType := header[0]
+
+	if messageType != TYPE_WINNERS {
+		return fmt.Errorf("unexpected message type: %d", messageType)
+	}
+	messageLength := binary.BigEndian.Uint32(header[1:])
+
+	message, err := safe_socket.RecvAll(client.conn, int(messageLength))
+	if err != nil {
+		logger.Error("recv-message", logger.Fail)
+		return err
+	}
+	file, err := os.Create(client.config.OutputFile)
+	if err != nil {
+		log.Fatalf("Error al crear el outputFile: %s", err)
+	}
+	if _, err := file.Write(message); err != nil {
+		return err
+	}
+	file.Close()
+	return nil
+}
+
 func (client *Client) Run() error {
 	const mainAction = "enviando registros de agencia"
 	defer client.conn.Close()
@@ -166,20 +196,10 @@ func (client *Client) Run() error {
 		return err
 	}
 
-	final_message, err := safe_socket.RecvAll(client.conn, CLIENT_BUFFER_MAX_SIZE)
-	if err != nil {
-		logger.Error("recv-response", logger.Fail)
+	//recibir mensaje final con ganadores
+	if err := receiveWinners(client); err != nil {
 		return err
 	}
-	file, err := os.Create(client.config.OutputFile)
-	if err != nil {
-		log.Fatalf("Error al crear el archivo: %s", err)
-	}
-	defer file.Close()
-
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
-	writer.Write([]string{string(final_message)})
 
 	logger.Info(mainAction, logger.Success, "agency-id", client.config.AgencyId)
 

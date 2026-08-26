@@ -9,6 +9,7 @@ _HEADER_LENGTH = 5
 _TYPE_GREETINGS = 1
 _TYPE_BET = 2
 _TYPE_END = 3
+_TYPE_WINNERS = 4
 
 class Server:
     def __init__(self, server_host: str, server_port: int) -> None:
@@ -40,6 +41,9 @@ class Server:
         bets = []
         for line in message.splitlines():
             col = line.split(",")
+            if len(col) != 5:
+                logger.error(action, logger.LogResult.fail, "bet mal formateada", line)
+                continue
             bet = Bet(
                 agency_id,
                 col[0],
@@ -51,6 +55,31 @@ class Server:
             bets.append(bet)
 
         return bets
+
+    def bets_csv(self, bets: list[Bet]) -> str:
+        action = "bets-csv"
+        logger.info(action, logger.LogResult.in_progress)
+        csv_lines = []
+        for bet in bets:
+            csv_lines.append(
+                f"{bet.first_name},{bet.last_name},{bet.document},{bet.birthdate},{bet.number}"
+            )
+        return "\n".join(csv_lines)
+
+    def send_winners(self, client_socket, lottery: Lottery, agency_id: int):
+        action = "send-winners"
+        logger.info(action, logger.LogResult.in_progress)
+        winners = []
+        for bet in lottery.load_bets():
+            if lottery.has_won(bet) and bet.agency_id == agency_id:
+                winners.append(bet)
+
+        winners_csv = self.bets_csv(winners)
+        message_length = len(winners_csv.encode("utf-8"))
+        header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
+        safe_socket.send_all(client_socket, header)
+        safe_socket.send_all(client_socket, winners_csv.encode("utf-8"))
+        
 
 
     def _handle_client(self, client_socket):
@@ -70,16 +99,18 @@ class Server:
 
                 if message_type == _TYPE_GREETINGS:
                     agency = self.handle_greetings(client_socket, length)
+                    lottery = Lottery("bets" + str(agency) + ".csv")
                 elif message_type == _TYPE_BET:
                     client_message = self.handle_bets(client_socket, length)
                     bets = self.parse_bets(client_message, agency)
-                    lottery.store_bet(bets)
+                    lottery.store_bets(bets)
                     message_amount += 1
                 elif message_type == _TYPE_END:
                     break
                 
-            final_message = (f"Agency: {agency}, Messages received: {message_amount}\n").encode("utf-8")
-            safe_socket.send_all(client_socket, final_message)
+            final_message = (f"Agency: {agency}, Messages received: {message_amount}\n")
+            logger.info(action, logger.LogResult.success, final_message)
+            self.send_winners(client_socket, lottery, agency)
         except Exception as e:
             logger.error(
                 action, logger.LogResult.fail, "messages-amount", message_amount
