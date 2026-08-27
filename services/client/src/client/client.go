@@ -17,7 +17,6 @@ import (
 const CONNECTION_ATTEMPTS_MAX = 3
 const CONNECTION_ATTEMPS_DELAY_MS = 200
 
-const CLIENT_BUFFER_MAX_SIZE = 1024
 const SIZE_LENGTH = 4
 const AGENCY_ID_LENGTH = 4
 const TYPE_LENGTH = 1
@@ -33,6 +32,7 @@ type ClientConfig struct {
 	AgencyId   string
 	InputFile  string
 	OutputFile string
+	BatchSize  int
 }
 
 type Client struct {
@@ -123,29 +123,32 @@ func sendgreetings(client *Client) error {
 }
 
 func receiveWinners(client *Client) error {
-	header, err := safe_socket.RecvAll(client.conn, TYPE_LENGTH+SIZE_LENGTH)
-	if err != nil {
-		logger.Error("recv-header", logger.Fail)
-		return err
-	}
-	messageType := header[0]
-
-	if messageType != TYPE_WINNERS {
-		return fmt.Errorf("unexpected message type: %d", messageType)
-	}
-	messageLength := binary.BigEndian.Uint32(header[1:])
-
-	message, err := safe_socket.RecvAll(client.conn, int(messageLength))
-	if err != nil {
-		logger.Error("recv-message", logger.Fail)
-		return err
-	}
 	file, err := os.Create(client.config.OutputFile)
 	if err != nil {
 		log.Fatalf("Error al crear el outputFile: %s", err)
 	}
-	if _, err := file.Write(message); err != nil {
-		return err
+	for true {
+		header, err := safe_socket.RecvAll(client.conn, TYPE_LENGTH+SIZE_LENGTH)
+		if err != nil {
+			logger.Error("recv-header", logger.Fail)
+			return err
+		}
+		messageType := header[0]
+		if messageType == TYPE_END {
+			break
+		} else if messageType != TYPE_WINNERS {
+			return fmt.Errorf("unexpected message type: %d", messageType)
+		}
+		messageLength := binary.BigEndian.Uint32(header[1:])
+
+		message, err := safe_socket.RecvAll(client.conn, int(messageLength))
+		if err != nil {
+			logger.Error("recv-message", logger.Fail)
+			return err
+		}
+		if _, err := file.Write(message); err != nil {
+			return err
+		}
 	}
 	file.Close()
 	return nil
@@ -163,20 +166,25 @@ func (client *Client) Run() error {
 		return err
 	}
 	buffer := []byte{}
+	nBets := 0
 	for scanner.Scan() {
 		bline := []byte(scanner.Text() + "\n")
 		messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", i}
 		logger.Info(mainAction, logger.InProgress, messageArgs...)
-		if len(buffer)+len(bline) > CLIENT_BUFFER_MAX_SIZE {
+		buffer = append(buffer, bline...)
+		nBets++
+		i++
+		if nBets >= client.config.BatchSize {
 			//enviar registros acumulados
 			if err := sendMessage(client, TYPE_BET, buffer); err != nil {
 				logger.Error("send-message", logger.Fail, messageArgs...)
 				return err
 			}
+			//vacio el buffer y reinicio el contador
 			buffer = []byte{}
+			nBets = 0
 		}
-		buffer = append(buffer, bline...)
-		i++
+
 	}
 	if len(buffer) > 0 {
 		//enviar ultimos registros acumulados
@@ -184,6 +192,7 @@ func (client *Client) Run() error {
 			logger.Error("send-message", logger.Fail, "Error enviando mensaje final", "agency-id", client.config.AgencyId, "output-file", client.config.OutputFile)
 			return err
 		}
+		logger.Info(mainAction, logger.InProgress, []any{"agency-id", client.config.AgencyId, "message-id", i + 1, "ultimos-registros:", nBets}...)
 	}
 	if err := scanner.Err(); err != nil {
 		bufiocheck := []any{"cliente: ", client.config.AgencyId, "error leyendo archivo de entrada"}

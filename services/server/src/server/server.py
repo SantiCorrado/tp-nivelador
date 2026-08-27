@@ -1,9 +1,10 @@
+import os
 import socket
+import threading
 import logger
 import safe_socket
-from src_frozen.lottery.lottery import Lottery
-from src_frozen.lottery.bet import Bet
-_ECHO_SERVER_MESSAGE_SIZE = 1024
+from lottery.lottery import Lottery
+from lottery.bet import Bet
 
 _HEADER_LENGTH = 5
 _TYPE_GREETINGS = 1
@@ -12,9 +13,11 @@ _TYPE_END = 3
 _TYPE_WINNERS = 4
 
 class Server:
-    def __init__(self, server_host: str, server_port: int) -> None:
+    def __init__(self, server_host: str, server_port: int, batch_size: int, agency_quorum_min: int) -> None:
         self.server_host = server_host
         self.server_port = server_port
+        self.batch_size = batch_size
+        self.agency_quorum_min = agency_quorum_min
 
     def handle_header(self, header: bytes):
         action = "handle-header"
@@ -35,7 +38,7 @@ class Server:
         client_message = safe_socket.recv_all(client_socket, length)
         return int.from_bytes(client_message, byteorder="big")
 
-    def parse_bets(message: str, agency_id: int) -> list[Bet]:
+    def parse_bets(self, message: str, agency_id: int) -> list[Bet]:
         action = "parse-bets"
         logger.info(action, logger.LogResult.in_progress)
         bets = []
@@ -44,14 +47,7 @@ class Server:
             if len(col) != 5:
                 logger.error(action, logger.LogResult.fail, "bet mal formateada", line)
                 continue
-            bet = Bet(
-                agency_id,
-                col[0],
-                col[1],
-                int(col[2]),
-                col[3],
-                int(col[4])
-            )
+            bet = Bet(agency_id,col[0],col[1],int(col[2]),col[3],int(col[4]))
             bets.append(bet)
 
         return bets
@@ -70,19 +66,31 @@ class Server:
         action = "send-winners"
         logger.info(action, logger.LogResult.in_progress)
         winners = []
+        i = 0
         for bet in lottery.load_bets():
             if lottery.has_won(bet) and bet.agency_id == agency_id:
                 winners.append(bet)
-
-        winners_csv = self.bets_csv(winners)
-        message_length = len(winners_csv.encode("utf-8"))
-        header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
+                i += 1
+            if len(winners) >= self.batch_size:
+                winners_csv = self.bets_csv(winners)
+                message_length = len(winners_csv.encode("utf-8"))
+                header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
+                safe_socket.send_all(client_socket, header)
+                safe_socket.send_all(client_socket, winners_csv.encode("utf-8"))
+                winners = []
+        if len(winners) > 0:
+            winners_csv = self.bets_csv(winners)
+            message_length = len(winners_csv.encode("utf-8"))
+            header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
+            safe_socket.send_all(client_socket, header)
+            safe_socket.send_all(client_socket, winners_csv.encode("utf-8"))
+        header = bytes([_TYPE_END]) + (0).to_bytes(4, byteorder="big")
         safe_socket.send_all(client_socket, header)
-        safe_socket.send_all(client_socket, winners_csv.encode("utf-8"))
+        logger.info(action, logger.LogResult.success, "winners-sent", i)
         
 
 
-    def _handle_client(self, client_socket):
+    def _handle_client(self, client_socket) :
         action = "handle-client"
         message_amount = 0
         agency = -1
@@ -125,13 +133,19 @@ class Server:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             server_socket.bind((self.server_host, self.server_port))
             server_socket.listen()
-            while True:
+            input_agecies = set()
+            quorum = threading.Condition()
+            connections = 0
+            while connections < self.agency_quorum_min:
                 try:
                     logger.info(action, logger.LogResult.in_progress)
                     client_socket, _ = server_socket.accept()
+                    
                 except Exception as e:
                     logger.error(action, logger.LogResult.fail)
                     raise e
                 logger.info(action, logger.LogResult.success)
 
                 self._handle_client(client_socket)
+                connections += 1
+            
