@@ -21,7 +21,7 @@ class Connection(threading.Thread):
 
     def run(self):
         try:
-            self.agency_id = self.handle_client(self.client_socket)
+            self.handle_client(self.client_socket)
         except Exception as e:
             self.error = e
 
@@ -74,7 +74,7 @@ class Connection(threading.Thread):
 
                 if message_type == _TYPE_GREETINGS:
                     agency = self.handle_greetings(client_socket, length)
-                    self.agency_id = self.agency
+                    self.agency_id = agency
                 elif message_type == _TYPE_BET:
                     client_message = self.handle_bets(client_socket, length)
                     bets = self.parse_bets(client_message, agency)
@@ -130,14 +130,15 @@ class Server:
                     safe_socket.send_all(succesful_connections[bet.agency_id], winners_csv.encode("utf-8"))
                     winners[bet.agency_id] = []
         for w in winners:
-            winners_csv = self.bets_csv(winners[w])
-            message_length = len(winners_csv.encode("utf-8"))
-            header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
-            safe_socket.send_all(succesful_connections[w], header)
-            safe_socket.send_all(succesful_connections[w], winners_csv.encode("utf-8"))
-            header = bytes([_TYPE_END]) + (0).to_bytes(4, byteorder="big")
-            safe_socket.send_all(succesful_connections[w], header)
-            logger.info(action, logger.LogResult.success, "winners-sent", i)
+            if winners[w]:
+                winners_csv = self.bets_csv(winners[w])
+                message_length = len(winners_csv.encode("utf-8"))
+                header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
+                safe_socket.send_all(succesful_connections[w], header)
+                safe_socket.send_all(succesful_connections[w], winners_csv.encode("utf-8"))
+                header = bytes([_TYPE_END]) + (0).to_bytes(4, byteorder="big")
+                safe_socket.send_all(succesful_connections[w], header)
+                logger.info(action, logger.LogResult.success, "winners-sent", i)
         
 
     def run(self):
@@ -162,7 +163,7 @@ class Server:
                 
             for c in self.connections:
                 c.join()
-                if c.error == None:
+                if c.error is None:
                     self.succesful_connections[c.agency_id] = c.client_socket
             if len(self.succesful_connections) >= self.agency_quorum_min:
                 self.send_winners(self.succesful_connections, Lottery("bets.csv"))
