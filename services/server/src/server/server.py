@@ -136,9 +136,12 @@ class Server:
                 header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
                 safe_socket.send_all(succesful_connections[w], header)
                 safe_socket.send_all(succesful_connections[w], winners_csv.encode("utf-8"))
-                header = bytes([_TYPE_END]) + (0).to_bytes(4, byteorder="big")
-                safe_socket.send_all(succesful_connections[w], header)
-                logger.info(action, logger.LogResult.success, "winners-sent", i)
+                
+        for agency_id in succesful_connections:
+            header = bytes([_TYPE_END]) + (0).to_bytes(4, byteorder="big")
+            safe_socket.send_all(succesful_connections[agency_id], header)
+            logger.info(action, logger.LogResult.success, "winners-sent", agency_id)
+
         
 
     def run(self):
