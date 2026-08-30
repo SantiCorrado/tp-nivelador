@@ -141,6 +141,7 @@ class Server:
             header = bytes([_TYPE_END]) + (0).to_bytes(4, byteorder="big")
             safe_socket.send_all(succesful_connections[agency_id], header)
             logger.info(action, logger.LogResult.success, "winners-sent", agency_id)
+            succesful_connections[agency_id].close()
 
         
 
@@ -151,23 +152,28 @@ class Server:
             server_socket.listen()
             connection_number = 0
             needed_conections = self.agency_quorum_min
-            while connection_number < needed_conections:
-                try:
-                    logger.info(action, logger.LogResult.in_progress)
-                    client_socket, _ = server_socket.accept()
-                    connection_number += 1
-                except Exception as e:
-                    logger.error(action, logger.LogResult.fail)
-                    raise e
-                logger.info(action, logger.LogResult.success)
-                new_connection = Connection(client_socket)
-                self.connections.append(new_connection)
-                new_connection.start()
-                
-            for c in self.connections:
-                c.join()
-                if c.error is None:
-                    self.succesful_connections[c.agency_id] = c.client_socket
-            if len(self.succesful_connections) >= self.agency_quorum_min:
-                self.send_winners(self.succesful_connections, Lottery("bets.csv"))
-                # aca se manejarian los siguientes pasos. cierre de conexiones, etc
+            while True:
+                while connection_number < needed_conections:
+                    try:
+                        logger.info(action, logger.LogResult.in_progress)
+                        client_socket, _ = server_socket.accept()
+                        connection_number += 1
+                    except Exception as e:
+                        logger.error(action, logger.LogResult.fail)
+                        raise e
+                    logger.info(action, logger.LogResult.success)
+                    new_connection = Connection(client_socket)
+                    self.connections.append(new_connection)
+                    new_connection.start()
+                    
+                for c in self.connections:
+                    c.join()
+                    if c.error is None:
+                        self.succesful_connections[c.agency_id] = c.client_socket
+                if len(self.succesful_connections) >= self.agency_quorum_min:
+                    self.send_winners(self.succesful_connections, Lottery("bets.csv"))
+                    needed_conections = self.agency_quorum_min
+                    # aca se manejarian los siguientes pasos. cierre de conexiones, etc
+                else:
+                    needed_conections -= len(self.succesful_connections)
+                connection_number = 0
