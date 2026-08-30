@@ -10,7 +10,7 @@ AGENCY_QUORUM_MIN = int(os.environ.get("AGENCY_QUORUM_MIN"))
 
 def main():
     logger.init()
-    s = server.Server(SERVER_HOST, SERVER_PORT, 10, AGENCY_QUORUM_MIN)
+    s = server.Server(SERVER_HOST, SERVER_PORT, AGENCY_QUORUM_MIN)
     try:
         s.run()
     except Exception as e:

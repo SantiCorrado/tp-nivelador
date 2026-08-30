@@ -12,18 +12,29 @@ _TYPE_BET = 2
 _TYPE_END = 3
 _TYPE_WINNERS = 4
 
+_CONN_BATCH = 10
+
 class Connection(threading.Thread):
-    def __init__(self, client_socket):
+    def __init__(self, client_socket, finished_transaction, condition):
         super().__init__()
         self.client_socket = client_socket
         self.agency_id = None
         self.error = None
+        self.finished_transaction = finished_transaction
+        self.condition = condition
+        self.winners_ready = threading.Event()
+        self.winners = []
 
     def run(self):
         try:
             self.handle_client(self.client_socket)
         except Exception as e:
             self.error = e
+
+    def mark_finished(self):
+        with self.condition:
+            self.finished_transaction[self.agency_id] = self
+            self.condition.notify()
 
     def handle_header(self, header: bytes):
         action = "handle-header"
@@ -57,6 +68,39 @@ class Connection(threading.Thread):
             bets.append(bet)
         return bets
 
+    def bets_csv(self, bets: list[Bet]) -> str:
+        action = "bets-csv"
+        logger.info(action, logger.LogResult.in_progress)
+        csv_lines = []
+        for bet in bets:
+            csv_lines.append(
+                f"{bet.first_name},{bet.last_name},{bet.document},{bet.birthdate},{bet.number}"
+            )
+        return "\n".join(csv_lines)
+
+    def send_winners(self):
+            action = "sending-winners"
+            logger.info(action, logger.LogResult.in_progress,self.agency_id)
+            acum = []
+            for bet in self.winners:
+                acum.append(bet)
+                if len(acum) >= _CONN_BATCH:
+                    winners_csv = self.bets_csv(acum)
+                    message_length = len(winners_csv.encode("utf-8"))
+                    header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
+                    safe_socket.send_all(self.client_socket, header)
+                    safe_socket.send_all(self.client_socket, winners_csv.encode("utf-8"))
+                    acum = []
+            if acum:
+                winners_csv = self.bets_csv(acum)
+                message_length = len(winners_csv.encode("utf-8"))
+                header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
+                safe_socket.send_all(self.client_socket, header)
+                safe_socket.send_all(self.client_socket, winners_csv.encode("utf-8"))
+            header = bytes([_TYPE_END]) + (0).to_bytes(4, byteorder="big")
+            safe_socket.send_all(self.client_socket, header)
+            self.client_socket.close()
+
     def handle_client(self, client_socket) :
         action = "handle-client"
         message_amount = 0
@@ -81,8 +125,11 @@ class Connection(threading.Thread):
                     lottery.store_bets(bets)
                     message_amount += 1
                 elif message_type == _TYPE_END:
-                    break
-                
+                    self.mark_finished()
+                    self.winners_ready.wait()
+                    self.send_winners()
+                    return
+                                
             final_message = (f"Agency: {agency}, Messages received: {message_amount}\n")
             logger.info(action, logger.LogResult.success, final_message)
         except Exception as e:
@@ -92,56 +139,30 @@ class Connection(threading.Thread):
             raise e
 
 class Server:
-    def __init__(self, server_host: str, server_port: int, batch_size: int, agency_quorum_min: int) -> None:
+    def __init__(self, server_host: str, server_port: int, agency_quorum_min: int) -> None:
         self.server_host = server_host
         self.server_port = server_port
-        self.batch_size = batch_size
         self.agency_quorum_min = agency_quorum_min
         self.connections = []
-        self.succesful_connections = {}
+        self.finished_transactions = {}
+        self.condition = threading.Condition()
 
-    def bets_csv(self, bets: list[Bet]) -> str:
-        action = "bets-csv"
-        logger.info(action, logger.LogResult.in_progress)
-        csv_lines = []
-        for bet in bets:
-            csv_lines.append(
-                f"{bet.first_name},{bet.last_name},{bet.document},{bet.birthdate},{bet.number}"
-            )
-        return "\n".join(csv_lines)
-
-    def send_winners(self, succesful_connections, lottery: Lottery):
-        action = "send-winners"
+    def get_winners(self, finished_transactions, lottery: Lottery):
+        action = "get-winners"
         logger.info(action, logger.LogResult.in_progress)
         winners = {}
-        i = 0
         for bet in lottery.load_bets():
-            if lottery.has_won(bet) and bet.agency_id in succesful_connections:
+            if lottery.has_won(bet) and bet.agency_id in finished_transactions:
                 if bet.agency_id not in winners:
                     winners[bet.agency_id] = [bet]
                 else:
                     winners[bet.agency_id].append(bet)
-                i += 1
-                if len(winners[bet.agency_id]) >= self.batch_size:
-                    winners_csv = self.bets_csv(winners[bet.agency_id])
-                    message_length = len(winners_csv.encode("utf-8"))
-                    header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
-                    safe_socket.send_all(succesful_connections[bet.agency_id], header)
-                    safe_socket.send_all(succesful_connections[bet.agency_id], winners_csv.encode("utf-8"))
-                    winners[bet.agency_id] = []
         for w in winners:
             if winners[w]:
-                winners_csv = self.bets_csv(winners[w])
-                message_length = len(winners_csv.encode("utf-8"))
-                header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
-                safe_socket.send_all(succesful_connections[w], header)
-                safe_socket.send_all(succesful_connections[w], winners_csv.encode("utf-8"))
-                
-        for agency_id in succesful_connections:
-            header = bytes([_TYPE_END]) + (0).to_bytes(4, byteorder="big")
-            safe_socket.send_all(succesful_connections[agency_id], header)
-            logger.info(action, logger.LogResult.success, "winners-sent", agency_id)
-            succesful_connections[agency_id].close()
+                finished_transactions[w].winners = winners[w]
+        for agency_id in finished_transactions:
+            connection = finished_transactions[agency_id]
+            connection.winners_ready.set()
 
         
 
@@ -150,30 +171,34 @@ class Server:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             server_socket.bind((self.server_host, self.server_port))
             server_socket.listen()
-            connection_number = 0
             needed_conections = self.agency_quorum_min
             while True:
-                while connection_number < needed_conections:
+                while len(self.connections) < needed_conections:
                     try:
                         logger.info(action, logger.LogResult.in_progress)
                         client_socket, _ = server_socket.accept()
-                        connection_number += 1
                     except Exception as e:
                         logger.error(action, logger.LogResult.fail)
                         raise e
                     logger.info(action, logger.LogResult.success)
-                    new_connection = Connection(client_socket)
+                    new_connection = Connection(client_socket, self.finished_transactions, self.condition)
                     self.connections.append(new_connection)
                     new_connection.start()
+
+                with self.condition:
+                    while len(self.finished_transactions) < self.agency_quorum_min:
+                        self.condition.wait()
                     
                 for c in self.connections:
-                    c.join()
-                    if c.error is None:
-                        self.succesful_connections[c.agency_id] = c.client_socket
-                if len(self.succesful_connections) >= self.agency_quorum_min:
-                    self.send_winners(self.succesful_connections, Lottery("bets.csv"))
+                    if c.error is not None:
+                        logger.info("Error en la transaccion de registros", c.error, [c.agency_id])
+                if len(self.finished_transactions) >= self.agency_quorum_min:
+                    #Aca se hace el sorteo
+                    self.get_winners(self.finished_transactions, Lottery("bets.csv"))
+                    for connection in self.finished_transactions.values():
+                        connection.join()
+                    self.finished_transactions = {}
                     needed_conections = self.agency_quorum_min
-                    # aca se manejarian los siguientes pasos. cierre de conexiones, etc
                 else:
-                    needed_conections -= len(self.succesful_connections)
-                connection_number = 0
+                    needed_conections -= len(self.finished_transactions)
+                self.connections = []
