@@ -170,7 +170,6 @@ func (client *Client) Run() error {
 	for scanner.Scan() {
 		bline := []byte(scanner.Text() + "\n")
 		messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", i}
-		logger.Info(mainAction, logger.InProgress, messageArgs...)
 		buffer = append(buffer, bline...)
 		nBets++
 		i++
@@ -192,7 +191,6 @@ func (client *Client) Run() error {
 			logger.Error("send-message", logger.Fail, "Error enviando mensaje final", "agency-id", client.config.AgencyId, "output-file", client.config.OutputFile)
 			return err
 		}
-		logger.Info(mainAction, logger.InProgress, []any{"agency-id", client.config.AgencyId, "message-id", i + 1, "ultimos-registros:", nBets}...)
 	}
 	if err := scanner.Err(); err != nil {
 		bufiocheck := []any{"cliente: ", client.config.AgencyId, "error leyendo archivo de entrada"}

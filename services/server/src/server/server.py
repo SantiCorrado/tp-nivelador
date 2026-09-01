@@ -38,14 +38,12 @@ class Connection(threading.Thread):
 
     def handle_header(self, header: bytes):
         action = "handle-header"
-        logger.info(action, logger.LogResult.in_progress)
         message_type = header[0]
         length = int.from_bytes(header[1:5], byteorder="big")
         return message_type, length
     
     def handle_bets(self, client_socket, length):
         action = "handle-bet"
-        logger.info(action, logger.LogResult.in_progress)
         client_message = safe_socket.recv_all(client_socket, length)
         return client_message.decode("utf-8")
 
@@ -57,7 +55,6 @@ class Connection(threading.Thread):
 
     def parse_bets(self, message: str, agency_id: int) -> list[Bet]:
         action = "parse-bets"
-        logger.info(action, logger.LogResult.in_progress)
         bets = []
         for line in message.splitlines():
             col = line.split(",")
@@ -70,7 +67,6 @@ class Connection(threading.Thread):
 
     def bets_csv(self, bets: list[Bet]) -> str:
         action = "bets-csv"
-        logger.info(action, logger.LogResult.in_progress)
         csv_lines = []
         for bet in bets:
             csv_lines.append(
@@ -108,7 +104,6 @@ class Connection(threading.Thread):
         length = 0
         lottery = Lottery("bets.csv")
         try:
-            logger.info(action, logger.LogResult.in_progress)
             while True:
                 header = safe_socket.recv_all( client_socket, _HEADER_LENGTH)
                 if not header:
@@ -175,7 +170,6 @@ class Server:
             while True:
                 while len(self.connections) < needed_conections:
                     try:
-                        logger.info(action, logger.LogResult.in_progress)
                         client_socket, _ = server_socket.accept()
                     except Exception as e:
                         logger.error(action, logger.LogResult.fail)
