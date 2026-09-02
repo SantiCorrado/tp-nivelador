@@ -14,8 +14,8 @@ import (
 	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/safe_socket"
 )
 
-const CONNECTION_ATTEMPTS_MAX = 3
-const CONNECTION_ATTEMPS_DELAY_MS = 200
+const CONNECTION_ATTEMPTS_MAX = 10
+const CONNECTION_ATTEMPS_DELAY_MS = 300
 
 const SIZE_LENGTH = 4
 const AGENCY_ID_LENGTH = 4
