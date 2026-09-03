@@ -165,23 +165,24 @@ func (client *Client) Run() error {
 	if err := sendgreetings(client); err != nil {
 		return err
 	}
-	buffer := []byte{}
+	buffer := make([]byte, 0, 4096)
 	nBets := 0
 	for scanner.Scan() {
-		bline := []byte(scanner.Text() + "\n")
-		messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", i}
-		buffer = append(buffer, bline...)
+		buffer = append(buffer, scanner.Bytes()...)
+		buffer = append(buffer, '\n')
 		nBets++
 		i++
 		if nBets >= client.config.BatchSize {
 			//enviar registros acumulados
 			if err := sendMessage(client, TYPE_BET, buffer); err != nil {
-				logger.Error("send-message", logger.Fail, messageArgs...)
+				logger.Error("send-message", logger.Fail, []any{"agency-id", client.config.AgencyId, "message-id", i}...)
 				return err
 			}
 			//vacio el buffer y reinicio el contador
-			buffer = []byte{}
+			buffer = buffer[:0]
 			nBets = 0
+
+			//runtime.GC()
 		}
 
 	}
@@ -191,6 +192,7 @@ func (client *Client) Run() error {
 			logger.Error("send-message", logger.Fail, "Error enviando mensaje final", "agency-id", client.config.AgencyId, "output-file", client.config.OutputFile)
 			return err
 		}
+		buffer = buffer[:0]
 	}
 	if err := scanner.Err(); err != nil {
 		bufiocheck := []any{"cliente: ", client.config.AgencyId, "error leyendo archivo de entrada"}
