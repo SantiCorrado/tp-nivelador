@@ -1,5 +1,3 @@
-from multiprocessing.dummy import connection
-import os
 import socket
 import threading
 import logger
@@ -16,6 +14,7 @@ _TYPE_ACK = 5
 
 _CONN_BATCH = 10
 
+# Esta clase representa una conexion con un cliente (agencia) y se encarga de recibir las apuestas, procesarlas y enviar los ganadores cuando el thread principal lo indique
 class Connection(threading.Thread):
     def __init__(self, client_socket, finished_transaction, condition, sigtermarrived):
         super().__init__()
@@ -187,7 +186,7 @@ class Server:
             server_socket.listen()
             server_socket.settimeout(1)
             needed_conections = self.agency_quorum_min
-            while True:
+            while not sigterm_arrived.is_set():
                 # Aca se aceptan conexiones hasta que se llegue a la cantidad minima de conexiones requeridas
                 while len(self.connections) < needed_conections and not sigterm_arrived.is_set():
                     try:
@@ -210,30 +209,29 @@ class Server:
                     while len(self.finished_transactions) < self.agency_quorum_min and not sigterm_arrived.is_set():
                         self.condition.wait(timeout=1)
                 successful_connections = {}
-                #Aca se filtran las conexiones exitosas de las que fallaron
+                #Aca se filtran las conexiones succesful de las que fallaron
                 for agency_id in self.finished_transactions:
                     if self.finished_transactions[agency_id].error is None:
                         successful_connections[agency_id] = self.finished_transactions[agency_id]
                     else:
                         logger.info("Error en la transaccion de registros", self.finished_transactions[agency_id].error, [agency_id])
-                #En el caso de que se tenga una cantidad de conexiones exitosas mayor o igual a la cantidad minima requerida, se hace el sorteo y se envian los ganadores a cada agencia
-                if len(successful_connections) >= self.agency_quorum_min and not sigterm_arrived.is_set():
+                #En el caso de que se tenga una cantidad de conexiones succesful mayor o igual a la cantidad minima requerida, se hace el sorteo y se envian los ganadores a cada agencia
+                if len(successful_connections) == self.agency_quorum_min and not sigterm_arrived.is_set():
                     #Aca se hace el sorteo y se envian los ganadores a cada agencia
                     self.get_winners(successful_connections, Lottery("bets.csv"))
                     for connection in successful_connections.values():
-                        connection.join()
+                        connection.join(timeout=1)
                     #Aca se reinician las conexiones y se vuelve a esperar a que todas las conexiones envien sus ganadores
                     self.finished_transactions = {}
+                    self.connections = []
                     needed_conections = self.agency_quorum_min
                 else:
-                    #En el caso de que no se tenga la cantidad minima de conexiones exitosas, en la proxima iteracion
+                    #En el caso de que no se tenga la cantidad minima de conexiones succesful, en la proxima iteracion
                     #   solo se aceptaran la cantidad de conexiones que falten para llegar a la cantidad minima requerida
-                    #   y se mantiene la conexion con las agencias que ya enviaron sus apuestas exitosamente
-                    needed_conections -= len(self.finished_transactions)
-
+                    #   y se mantiene la conexion con las agencias que ya enviaron sus apuestas succesfully
+                    needed_conections = self.agency_quorum_min - len(successful_connections)
 
                 if sigterm_arrived.is_set():
                     logger.info("sigterm-handler", logger.LogResult.success, "SIGTERM received")
-                    self.close_connections()
                     break
-                self.connections = []
+            self.close_connections()
