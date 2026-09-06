@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -25,6 +26,7 @@ const TYPE_AGENCY_ID = byte(1)
 const TYPE_BET = byte(2)
 const TYPE_END = byte(3)
 const TYPE_WINNERS = byte(4)
+const TYPE_ACK = byte(5)
 
 type ClientConfig struct {
 	ServerHost string
@@ -113,6 +115,19 @@ func sendMessage(client *Client, messagetype byte, message []byte) error {
 	return nil
 }
 
+func receiveAck(client *Client) error {
+	header, err := safe_socket.RecvAll(client.conn, TYPE_LENGTH+SIZE_LENGTH)
+	if err != nil {
+		logger.Error("recv-header", logger.Fail)
+		return err
+	}
+	messageType := header[0]
+	if messageType != TYPE_ACK {
+		return fmt.Errorf("unexpected message type: %d", messageType)
+	}
+	return nil
+}
+
 func sendgreetings(client *Client) error {
 	id, err := encodeID(client.config.AgencyId)
 	if err != nil {
@@ -154,15 +169,24 @@ func receiveWinners(client *Client) error {
 	return nil
 }
 
-func (client *Client) Run() error {
+func (client *Client) Run(ctx context.Context) error {
 	const mainAction = "enviando registros de agencia"
 	defer client.conn.Close()
 	defer client.input.Close()
+
+	go func() {
+		<-ctx.Done()
+		client.conn.Close()
+	}()
+
 	scanner := bufio.NewScanner(client.input)
 
 	i := 0
 	// Enviar mensaje inicial
 	if err := sendgreetings(client); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	buffer := make([]byte, 0, 4096)
@@ -175,26 +199,45 @@ func (client *Client) Run() error {
 		if nBets >= client.config.BatchSize {
 			//enviar registros acumulados
 			if err := sendMessage(client, TYPE_BET, buffer); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
 				logger.Error("send-message", logger.Fail, []any{"agency-id", client.config.AgencyId, "message-id", i}...)
+				return err
+			}
+			if err := receiveAck(client); err != nil {
 				return err
 			}
 			//vacio el buffer y reinicio el contador
 			buffer = buffer[:0]
 			nBets = 0
 
-			//runtime.GC()
 		}
 
 	}
+
+	if ctx.Err() != nil {
+		return nil
+	}
+
 	if len(buffer) > 0 {
 		//enviar ultimos registros acumulados
 		if err := sendMessage(client, TYPE_BET, buffer); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			logger.Error("send-message", logger.Fail, "Error enviando mensaje final", "agency-id", client.config.AgencyId, "output-file", client.config.OutputFile)
 			return err
 		}
 		buffer = buffer[:0]
+		if err := receiveAck(client); err != nil {
+			return err
+		}
 	}
 	if err := scanner.Err(); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		bufiocheck := []any{"cliente: ", client.config.AgencyId, "error leyendo archivo de entrada"}
 		logger.Error("read-input", logger.Fail, bufiocheck...)
 		return err
@@ -202,11 +245,17 @@ func (client *Client) Run() error {
 
 	//Fin archivo, enviar mensaje de fin
 	if err := sendMessage(client, TYPE_END, nil); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 
 	//recibir mensaje final con ganadores
 	if err := receiveWinners(client); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 

@@ -1,3 +1,4 @@
+from multiprocessing.dummy import connection
 import os
 import socket
 import threading
@@ -11,25 +12,31 @@ _TYPE_GREETINGS = 1
 _TYPE_BET = 2
 _TYPE_END = 3
 _TYPE_WINNERS = 4
+_TYPE_ACK = 5
 
 _CONN_BATCH = 10
 
 class Connection(threading.Thread):
-    def __init__(self, client_socket, finished_transaction, condition):
+    def __init__(self, client_socket, finished_transaction, condition, sigtermarrived):
         super().__init__()
         self.client_socket = client_socket
         self.agency_id = None
         self.error = None
+        self.condition = condition #Esta condition se utiliza para notificar al thread principal cuando una agencia termina de enviar sus apuestas o falla
         self.finished_transaction = finished_transaction
-        self.condition = condition
-        self.winners_ready = threading.Event()
-        self.winners = []
+        self.winners_ready = threading.Event() #Esta event se utiliza por el thread principal para notificar a este thread que ya puede enviar los ganadores al cliente
+        self.winners = [] # Una vez que se ejecuta winners_ready, se cargan los ganadores de la agencia en esta lista y se envian al cliente
+        self.sigtermarrived = sigtermarrived
 
     def run(self):
         try:
             self.handle_client(self.client_socket)
         except Exception as e:
-            self.error = e
+            if not self.sigtermarrived.is_set():
+                with self.condition:
+                    self.finished_transaction[self.agency_id] = self
+                    self.condition.notify()
+                self.error = e
 
     def mark_finished(self):
         with self.condition:
@@ -104,7 +111,7 @@ class Connection(threading.Thread):
         length = 0
         lottery = Lottery("bets.csv")
         try:
-            while True:
+            while not self.sigtermarrived.is_set():
                 header = safe_socket.recv_all( client_socket, _HEADER_LENGTH)
                 if not header:
                     break
@@ -119,12 +126,17 @@ class Connection(threading.Thread):
                     bets = self.parse_bets(client_message, agency)
                     lottery.store_bets(bets)
                     message_amount += 1
+                    ack_header = bytes([_TYPE_ACK]) + (0).to_bytes(4, byteorder="big")
+                    safe_socket.send_all(client_socket, ack_header)
                 elif message_type == _TYPE_END:
                     self.mark_finished()
-                    self.winners_ready.wait()
-                    self.send_winners()
+                    while not self.sigtermarrived.is_set():
+                        if self.winners_ready.wait(timeout=1):
+                            self.send_winners()
+                            return
                     return
-                                
+            if self.sigtermarrived.is_set():
+                return                    
             final_message = (f"Agency: {agency}, Messages received: {message_amount}\n")
             logger.info(action, logger.LogResult.success, final_message)
         except Exception as e:
@@ -142,6 +154,8 @@ class Server:
         self.finished_transactions = {}
         self.condition = threading.Condition()
 
+    #Aca se obtiene la lista de ganadores de cada agencia y se les notifica a cada thread del servidor
+    #   que ya pueden enviar los ganadores al cliente
     def get_winners(self, finished_transactions, lottery: Lottery):
         action = "get-winners"
         logger.info(action, logger.LogResult.in_progress)
@@ -159,40 +173,67 @@ class Server:
             connection = finished_transactions[agency_id]
             connection.winners_ready.set()
 
+    def close_connections(self):
+        for connection in self.connections:
+            connection.client_socket.close()
+        for connection in self.connections:
+            connection.join(timeout=1)
         
 
-    def run(self):
+    def run(self,sigterm_arrived):
         action = "accept-connection"
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             server_socket.bind((self.server_host, self.server_port))
             server_socket.listen()
+            server_socket.settimeout(1)
             needed_conections = self.agency_quorum_min
             while True:
-                while len(self.connections) < needed_conections:
+                # Aca se aceptan conexiones hasta que se llegue a la cantidad minima de conexiones requeridas
+                while len(self.connections) < needed_conections and not sigterm_arrived.is_set():
                     try:
                         client_socket, _ = server_socket.accept()
+                    except socket.timeout:
+                        continue
                     except Exception as e:
+                        if sigterm_arrived.is_set():
+                            logger.info("sigterm-handler", logger.LogResult.success, "SIGTERM received")
+                            break
                         logger.error(action, logger.LogResult.fail)
                         raise e
                     logger.info(action, logger.LogResult.success)
-                    new_connection = Connection(client_socket, self.finished_transactions, self.condition)
+                    new_connection = Connection(client_socket, self.finished_transactions, self.condition, sigterm_arrived)
                     self.connections.append(new_connection)
                     new_connection.start()
 
+                #Aca se espera a que todas las conexiones terminen de enviar sus apuestas (o a que fallen)
                 with self.condition:
-                    while len(self.finished_transactions) < self.agency_quorum_min:
-                        self.condition.wait()
-                    
-                for c in self.connections:
-                    if c.error is not None:
-                        logger.info("Error en la transaccion de registros", c.error, [c.agency_id])
-                if len(self.finished_transactions) >= self.agency_quorum_min:
-                    #Aca se hace el sorteo
-                    self.get_winners(self.finished_transactions, Lottery("bets.csv"))
-                    for connection in self.finished_transactions.values():
+                    while len(self.finished_transactions) < self.agency_quorum_min and not sigterm_arrived.is_set():
+                        self.condition.wait(timeout=1)
+                successful_connections = {}
+                #Aca se filtran las conexiones exitosas de las que fallaron
+                for agency_id in self.finished_transactions:
+                    if self.finished_transactions[agency_id].error is None:
+                        successful_connections[agency_id] = self.finished_transactions[agency_id]
+                    else:
+                        logger.info("Error en la transaccion de registros", self.finished_transactions[agency_id].error, [agency_id])
+                #En el caso de que se tenga una cantidad de conexiones exitosas mayor o igual a la cantidad minima requerida, se hace el sorteo y se envian los ganadores a cada agencia
+                if len(successful_connections) >= self.agency_quorum_min and not sigterm_arrived.is_set():
+                    #Aca se hace el sorteo y se envian los ganadores a cada agencia
+                    self.get_winners(successful_connections, Lottery("bets.csv"))
+                    for connection in successful_connections.values():
                         connection.join()
+                    #Aca se reinician las conexiones y se vuelve a esperar a que todas las conexiones envien sus ganadores
                     self.finished_transactions = {}
                     needed_conections = self.agency_quorum_min
                 else:
+                    #En el caso de que no se tenga la cantidad minima de conexiones exitosas, en la proxima iteracion
+                    #   solo se aceptaran la cantidad de conexiones que falten para llegar a la cantidad minima requerida
+                    #   y se mantiene la conexion con las agencias que ya enviaron sus apuestas exitosamente
                     needed_conections -= len(self.finished_transactions)
+
+
+                if sigterm_arrived.is_set():
+                    logger.info("sigterm-handler", logger.LogResult.success, "SIGTERM received")
+                    self.close_connections()
+                    break
                 self.connections = []

@@ -17,7 +17,7 @@ def send_all(socket: socket.socket, bytes):
     total = 0
     while total < len(bytes):
         n = socket.send(bytes[total:])
-        if n == 0:
+        if n is None:
             # aca habria algun error
             return None
         total += n
