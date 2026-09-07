@@ -12,8 +12,6 @@ _TYPE_END = 3
 _TYPE_WINNERS = 4
 _TYPE_ACK = 5
 
-_CONN_BATCH = 10
-
 # Esta clase representa una conexion con un cliente (agencia) y se encarga de recibir las apuestas, procesarlas y enviar los ganadores cuando el thread principal lo indique
 class Connection(threading.Thread):
     def __init__(self, client_socket, finished_transaction, condition, sigtermarrived):
@@ -81,27 +79,16 @@ class Connection(threading.Thread):
         return "\n".join(csv_lines)
 
     def send_winners(self):
-            action = "sending-winners"
-            logger.info(action, logger.LogResult.in_progress,self.agency_id)
-            acum = []
-            for bet in self.winners:
-                acum.append(bet)
-                if len(acum) >= _CONN_BATCH:
-                    winners_csv = self.bets_csv(acum)
-                    message_length = len(winners_csv.encode("utf-8"))
-                    header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
-                    safe_socket.send_all(self.client_socket, header)
-                    safe_socket.send_all(self.client_socket, winners_csv.encode("utf-8"))
-                    acum = []
-            if acum:
-                winners_csv = self.bets_csv(acum)
-                message_length = len(winners_csv.encode("utf-8"))
-                header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
-                safe_socket.send_all(self.client_socket, header)
-                safe_socket.send_all(self.client_socket, winners_csv.encode("utf-8"))
-            header = bytes([_TYPE_END]) + (0).to_bytes(4, byteorder="big")
-            safe_socket.send_all(self.client_socket, header)
-            self.client_socket.close()
+        action = "sending-winners"
+        logger.info(action, logger.LogResult.in_progress,self.agency_id)
+        winners_csv = self.bets_csv(self.winners)
+        message_length = len(winners_csv.encode("utf-8"))
+        header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
+        safe_socket.send_all(self.client_socket, header)
+        safe_socket.send_all(self.client_socket, winners_csv.encode("utf-8"))
+        header = bytes([_TYPE_END]) + (0).to_bytes(4, byteorder="big")
+        safe_socket.send_all(self.client_socket, header)
+        self.client_socket.close()
 
     def handle_client(self, client_socket) :
         action = "handle-client"
@@ -220,6 +207,7 @@ class Server:
                     #Aca se hace el sorteo y se envian los ganadores a cada agencia
                     self.get_winners(successful_connections, Lottery("bets.csv"))
                     for connection in successful_connections.values():
+                        #Aca se espera a que cada thread de conexion envie los ganadores al cliente y finalice su ejecucion
                         connection.join(timeout=1)
                     #Aca se reinician las conexiones y se vuelve a esperar a que todas las conexiones envien sus ganadores
                     self.finished_transactions = {}

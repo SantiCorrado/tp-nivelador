@@ -211,15 +211,11 @@ func (client *Client) Run(ctx context.Context) error {
 			//vacio el buffer y reinicio el contador
 			buffer = buffer[:0]
 			nBets = 0
-
 		}
-
 	}
-
 	if ctx.Err() != nil {
 		return nil
 	}
-
 	if len(buffer) > 0 {
 		//enviar ultimos registros acumulados
 		if err := sendMessage(client, TYPE_BET, buffer); err != nil {
@@ -242,7 +238,6 @@ func (client *Client) Run(ctx context.Context) error {
 		logger.Error("read-input", logger.Fail, bufiocheck...)
 		return err
 	}
-
 	//Fin archivo, enviar mensaje de fin
 	if err := sendMessage(client, TYPE_END, nil); err != nil {
 		if ctx.Err() != nil {
@@ -250,7 +245,6 @@ func (client *Client) Run(ctx context.Context) error {
 		}
 		return err
 	}
-
 	//recibir mensaje final con ganadores
 	if err := receiveWinners(client); err != nil {
 		if ctx.Err() != nil {
@@ -258,7 +252,6 @@ func (client *Client) Run(ctx context.Context) error {
 		}
 		return err
 	}
-
 	logger.Info(mainAction, logger.Success, "agency-id", client.config.AgencyId)
 
 	return nil
