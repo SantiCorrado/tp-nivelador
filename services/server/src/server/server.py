@@ -39,19 +39,18 @@ class Connection(threading.Thread):
                     self.condition.notify()
                 self.error = e
 
+    #Se registra en el diccionario de finished transactions que la agencia termino de enviar sus apuestas
     def mark_finished(self):
         with self.condition:
             self.finished_transaction[self.agency_id] = self
             self.condition.notify()
 
     def handle_header(self, header: bytes):
-        action = "handle-header"
         message_type = header[0]
         length = int.from_bytes(header[1:5], byteorder="big")
         return message_type, length
     
     def handle_bets(self, client_socket, length):
-        action = "handle-bet"
         client_message = safe_socket.recv_all(client_socket, length)
         return client_message.decode("utf-8")
 
@@ -61,6 +60,7 @@ class Connection(threading.Thread):
         client_message = safe_socket.recv_all(client_socket, length)
         return int.from_bytes(client_message, byteorder="big")
 
+    #Pasar el batch a un arreglo de bets
     def parse_bets(self, message: str, agency_id: int) -> list[Bet]:
         action = "parse-bets"
         bets = []
@@ -74,7 +74,6 @@ class Connection(threading.Thread):
         return bets
 
     def bets_csv(self, bets: list[Bet]) -> str:
-        action = "bets-csv"
         csv_lines = []
         for bet in bets:
             csv_lines.append(
@@ -106,7 +105,7 @@ class Connection(threading.Thread):
                     break
 
                 message_type, length = self.handle_header(header)
-
+                #aca se manejan los distintos tipos de mensajes recibidos
                 if message_type == _TYPE_GREETINGS:
                     agency = self.handle_greetings(client_socket, length)
                     self.agency_id = agency
@@ -119,9 +118,11 @@ class Connection(threading.Thread):
                     ack_header = bytes([_TYPE_ACK]) + (0).to_bytes(4, byteorder="big")
                     safe_socket.send_all(client_socket, ack_header)
                 elif message_type == _TYPE_END:
+                    #Se termino de recibir las apuestas de la agencia
                     self.mark_finished()
                     while not self.sigtermarrived.is_set():
                         if self.winners_ready.wait(timeout=1):
+                            #El thread principal ya almaceno los ganadores de esta agencia en self.winners
                             self.send_winners()
                             return
                     return
@@ -209,7 +210,7 @@ class Server:
                         successful_connections[agency_id] = self.finished_transactions[agency_id]
                     else:
                         logger.info("Error en la transaccion de registros", self.finished_transactions[agency_id].error, [agency_id])
-                #En el caso de que se tenga una cantidad de conexiones succesful mayor o igual a la cantidad minima requerida, se hace el sorteo y se envian los ganadores a cada agencia
+                #En el caso de que se tenga una cantidad de conexiones succesful igual a la cantidad minima requerida, se hace el sorteo y se envian los ganadores a cada agencia
                 if len(successful_connections) == self.agency_quorum_min and not sigterm_arrived.is_set():
                     #Aca se hace el sorteo y se envian los ganadores a cada agencia
                     self.get_winners(successful_connections)
