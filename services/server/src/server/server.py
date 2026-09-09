@@ -12,9 +12,11 @@ _TYPE_END = 3
 _TYPE_WINNERS = 4
 _TYPE_ACK = 5
 
+BETS_FILE = "bets.csv"
+
 # Esta clase representa una conexion con un cliente (agencia) y se encarga de recibir las apuestas, procesarlas y enviar los ganadores cuando el thread principal lo indique
 class Connection(threading.Thread):
-    def __init__(self, client_socket, finished_transaction, condition, sigtermarrived):
+    def __init__(self, client_socket, finished_transaction, condition, sigtermarrived, lottery, lottery_lock):
         super().__init__()
         self.client_socket = client_socket
         self.agency_id = None
@@ -24,6 +26,8 @@ class Connection(threading.Thread):
         self.winners_ready = threading.Event() #Esta event se utiliza por el thread principal para notificar a este thread que ya puede enviar los ganadores al cliente
         self.winners = [] # Una vez que se ejecuta winners_ready, se cargan los ganadores de la agencia en esta lista y se envian al cliente
         self.sigtermarrived = sigtermarrived
+        self.lottery = lottery
+        self.lottery_lock = lottery_lock
 
     def run(self):
         try:
@@ -95,7 +99,6 @@ class Connection(threading.Thread):
         message_amount = 0
         agency = -1
         length = 0
-        lottery = Lottery("bets.csv")
         try:
             while not self.sigtermarrived.is_set():
                 header = safe_socket.recv_all( client_socket, _HEADER_LENGTH)
@@ -110,7 +113,8 @@ class Connection(threading.Thread):
                 elif message_type == _TYPE_BET:
                     client_message = self.handle_bets(client_socket, length)
                     bets = self.parse_bets(client_message, agency)
-                    lottery.store_bets(bets)
+                    with self.lottery_lock:
+                        self.lottery.store_bets(bets)
                     message_amount += 1
                     ack_header = bytes([_TYPE_ACK]) + (0).to_bytes(4, byteorder="big")
                     safe_socket.send_all(client_socket, ack_header)
@@ -137,21 +141,24 @@ class Server:
         self.server_port = server_port
         self.agency_quorum_min = agency_quorum_min
         self.connections = []
-        self.finished_transactions = {}
+        self.finished_transactions = {}# Diccionario de threads que ya registraron las apuestas de su cliente pero aun no realizaron el sorteo de ganadores
         self.condition = threading.Condition()
+        self.lottery = Lottery(BETS_FILE)
+        self.lottery_lock = threading.Lock()
 
     #Aca se obtiene la lista de ganadores de cada agencia y se les notifica a cada thread del servidor
     #   que ya pueden enviar los ganadores al cliente
-    def get_winners(self, finished_transactions, lottery: Lottery):
+    def get_winners(self, finished_transactions):
         action = "get-winners"
         logger.info(action, logger.LogResult.in_progress)
         winners = {}
-        for bet in lottery.load_bets():
-            if lottery.has_won(bet) and bet.agency_id in finished_transactions:
-                if bet.agency_id not in winners:
-                    winners[bet.agency_id] = [bet]
-                else:
-                    winners[bet.agency_id].append(bet)
+        with self.lottery_lock:
+            for bet in self.lottery.load_bets():
+                if self.lottery.has_won(bet) and bet.agency_id in finished_transactions:
+                    if bet.agency_id not in winners:
+                        winners[bet.agency_id] = [bet]
+                    else:
+                        winners[bet.agency_id].append(bet)
         for w in winners:
             if winners[w]:
                 finished_transactions[w].winners = winners[w]
@@ -187,7 +194,7 @@ class Server:
                         logger.error(action, logger.LogResult.fail)
                         raise e
                     logger.info(action, logger.LogResult.success)
-                    new_connection = Connection(client_socket, self.finished_transactions, self.condition, sigterm_arrived)
+                    new_connection = Connection(client_socket, self.finished_transactions, self.condition, sigterm_arrived, self.lottery, self.lottery_lock)
                     self.connections.append(new_connection)
                     new_connection.start()
 
@@ -205,7 +212,7 @@ class Server:
                 #En el caso de que se tenga una cantidad de conexiones succesful mayor o igual a la cantidad minima requerida, se hace el sorteo y se envian los ganadores a cada agencia
                 if len(successful_connections) == self.agency_quorum_min and not sigterm_arrived.is_set():
                     #Aca se hace el sorteo y se envian los ganadores a cada agencia
-                    self.get_winners(successful_connections, Lottery("bets.csv"))
+                    self.get_winners(successful_connections)
                     for connection in successful_connections.values():
                         #Aca se espera a que cada thread de conexion envie los ganadores al cliente y finalice su ejecucion
                         connection.join(timeout=1)
