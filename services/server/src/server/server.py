@@ -82,8 +82,8 @@ class Connection(threading.Thread):
         return "\n".join(csv_lines)
 
     def send_winners(self):
-        action = "sending-winners"
-        logger.info(action, logger.LogResult.in_progress,self.agency_id)
+        action = "sending-winners agency" + str(self.agency_id)
+        logger.info(action, logger.LogResult.in_progress)
         winners_csv = self.bets_csv(self.winners)
         message_length = len(winners_csv.encode("utf-8"))
         header = bytes([_TYPE_WINNERS]) + message_length.to_bytes(4, byteorder="big")
@@ -92,6 +92,7 @@ class Connection(threading.Thread):
         header = bytes([_TYPE_END]) + (0).to_bytes(4, byteorder="big")
         safe_socket.send_all(self.client_socket, header)
         self.client_socket.close()
+        logger.info(action, logger.LogResult.success)
 
     def handle_client(self, client_socket) :
         action = "handle-client"
@@ -166,6 +167,7 @@ class Server:
         for agency_id in finished_transactions:
             connection = finished_transactions[agency_id]
             connection.winners_ready.set()
+        
 
     def close_connections(self):
         for connection in self.connections:
